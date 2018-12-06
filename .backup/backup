@@ -1,0 +1,54 @@
+#!/bin/bash
+
+# backup script
+# script needs to maintain root privleges
+
+read -p "Begin Backup? This may take several minutes... (Y/n)" value
+
+if [ ! $value =~ ^(Y|y|yes|Yes|YES) ]; then
+	read -p "Reschedule backup for tomorrow (Y/n)?" schedDate
+	if [ $schedDate =~ ^(Y|y|yes|Yes|YES) ]; then [ at tomorrow -f '/.backup/backup'; exit ]; else; exit; fi # reschedule for tomorrow
+fi
+
+if dpkg-query -W curl; then apt-get install curl; fi # if curl dne, install it
+
+if dpkg-query -W dropbox_uploader; then
+	curl "https://raw.githubusercontent.com/andreafabrizi/Dropbox-Uploader/master/dropbox_uploader.sh" -o '/bin/dropbox_uploader.sh' # if dropbox_uploader dne, install it
+	chmod +x '/bin/dropbox_uploader.sh'
+fi
+
+DBuploader = '/bin/dropbox_uploader.sh'
+
+mkdir -p '/.backup/temp'   # if dependent directories dne, create them. what is $HOME for cron job?
+
+Tarball='/.backup/temp/backup-$(date +"%Y-%m-%d").tar.gz'
+
+apt-get update
+apt-get upgrade
+
+if [tar -zcvpf $Tarball --directory='/' --exclude='/.backup/temp' --exclude='/home/*/Dropbox' . ]; then
+
+	if [ ! -f '/.backup/passfile.txt' ]; then
+		read -sp 'Password: ' passvar > '/.backup/passfile.txt'
+	fi
+
+	openssl enc -e -aes-256-cbc -salt -in $Tarball -out $Tarball -pass file:'/.backup/passfile.txt'
+
+	if [ $DBuploader -qpf '/home/*/bin/.dropbox_uploader' upload $Tarball '/.PCbackup']; then # .dropbox_uploader is user specific. will upload to dropbox of every user
+		rm $Tarball
+	else
+		echo 'check /home/*/bin/.dropbox_uploader exists'
+	fi
+
+	# remove old backups
+	oldFiles = $DBuploader list '/.PCbackup' | awk '{print $2}' | sort -nr | awk 'NR>2'
+
+	$DBuploader delete '/.PCbackup/$oldFiles'
+
+else
+	echo 'Failed creating backup.'
+fi
+
+# decrypt script/instructions
+# /etc/cron.weekly this has root privleges and is controlled by anacron
+# ln -s /.backup/backup /etc/cron.weekly/backup
